@@ -1,0 +1,868 @@
+---
+title: "5205 FINAL GROUP PROJECT"
+author: "Group2: Yunuo Qi,Sitong Liu, Ciqing Mu, Tina He, Maggie Li Hong, Hairong Ji"
+date: "2025-04-17"
+output: html_document
+---
+
+```{r}
+setwd('/Users/qyn1215225/Desktop/CU/5205/project')
+# Load necessary library
+library(dplyr)
+library(tidyr)
+library(tidyquant)
+library(ggplot2)
+library(lubridate)
+library(readr)
+library(tidyverse)
+library(zoo)
+library(purrr)
+library(factoextra) 
+library(car)
+
+```
+
+# Correlation Analysis
+```{r}
+#1. Load and Prepare the Data
+# Read CSV
+df <- read_csv("//Users/qyn1215225/Desktop/CU/5205/project/merged_data.csv")
+
+# Convert date from "MM-YYYY" to Date format (use first of month)
+df <- df %>%
+  mutate(Date = parse_date(Date, format = "%m-%Y"))
+
+# Drop NA values for return and macro vars
+df_clean <- df %>%
+  drop_na(monthly_return, cpi, unemployment_rate, interest_rate, gdp, oil_price)
+```
+
+```{r}
+#2. Calculate Correlation by Stock
+# Define macroeconomic variables
+macro_vars <- c("cpi", "unemployment_rate", "interest_rate", "gdp", "oil_price")
+
+# Calculate correlation for each stock and macro variable
+cor_results <- df_clean %>%
+  group_by(stock) %>%
+  summarise(
+    cor_cpi = cor(monthly_return, cpi, use = "complete.obs"),
+    cor_unemployment = cor(monthly_return, unemployment_rate, use = "complete.obs"),
+    cor_interest = cor(monthly_return, interest_rate, use = "complete.obs"),
+    cor_gdp = cor(monthly_return, gdp, use = "complete.obs"),
+    cor_oil = cor(monthly_return, oil_price, use = "complete.obs")
+  ) %>%
+  ungroup()
+
+cor_results
+```
+
+```{r}
+# Calculate correlation for each industry and macro variable
+cor_results_industry <- df_clean %>%
+  group_by(industry) %>%
+  summarise(
+    cor_cpi = cor(monthly_return, cpi, use = "complete.obs"),
+    cor_unemployment = cor(monthly_return, unemployment_rate, use = "complete.obs"),
+    cor_interest = cor(monthly_return, interest_rate, use = "complete.obs"),
+    cor_gdp = cor(monthly_return, gdp, use = "complete.obs"),
+    cor_oil = cor(monthly_return, oil_price, use = "complete.obs")
+  ) %>%
+  ungroup()
+
+# View result
+cor_results_industry
+
+```
+
+```{r}
+# Step 1: Average monthly return per industry (already merged with macro vars)
+industry_monthly <- df_clean %>%
+  group_by(Date, industry) %>%
+  summarise(
+    avg_return = mean(monthly_return, na.rm = TRUE),
+    cpi = first(cpi),
+    interest_rate = first(interest_rate),
+    unemployment_rate = first(unemployment_rate),
+    gdp = first(gdp),
+    oil_price = first(oil_price),
+    .groups = "drop"
+  )
+
+# Step 2: Define rolling correlation function (returns numeric vector only)
+get_rolling_corr <- function(ret_vec, macro_vec, window = 120) {
+  zoo_data <- zoo(cbind(ret_vec, macro_vec))
+  roll_vals <- rollapply(zoo_data, width = window,
+                         FUN = function(x) cor(x[,1], x[,2], use = "complete.obs"),
+                         by.column = FALSE, align = "right", fill = NA)
+  return(as.numeric(roll_vals))  # return numeric vector
+}
+
+# Step 3: Loop through macro variables and compute rolling correlation for each industry
+macro_vars <- c("cpi", "interest_rate", "unemployment_rate", "gdp", "oil_price")
+
+industry_roll_corrs <- map_dfr(macro_vars, function(macro) {
+  industry_monthly %>%
+    group_by(industry) %>%
+    arrange(Date) %>%
+    mutate(
+      rolling_corr = get_rolling_corr(avg_return, .data[[macro]], window = 120),
+      macro_var = macro
+    ) %>%
+    ungroup()
+})
+
+# Step 4: Plot the rolling correlations faceted by macro variable
+ggplot(industry_roll_corrs, aes(x = Date, y = rolling_corr, color = industry)) +
+  geom_line(alpha = 0.9, linewidth = 1) +
+  facet_wrap(~ macro_var, scales = "free_y") +
+  theme_minimal() +
+  labs(title = "10-Year Rolling Correlation Between Industry Returns and Macro Variables",
+       y = "Rolling Correlation", x = "Year") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray")
+
+```
+
+```{r}
+# Optional: set consistent color
+library(ggplot2)
+
+# Split by macro variable
+macro_vars <- unique(industry_roll_corrs$macro_var)
+
+# Loop over each macro variable
+for (macro in macro_vars) {
+  # Filter for that macro
+  macro_df <- industry_roll_corrs %>% filter(macro_var == macro)
+  
+  # Get list of industries
+  industries <- unique(macro_df$industry)
+  
+  # Loop over each industry under that macro
+  for (ind in industries) {
+    industry_df <- macro_df %>% filter(industry == ind)
+    
+    # Generate and print the plot
+    p <- ggplot(industry_df, aes(x = Date, y = rolling_corr)) +
+      geom_line(color = "steelblue", linewidth = 1) +
+      theme_minimal() +
+      labs(title = paste0("10-Year Rolling Correlation: ", ind, " vs. ", macro),
+           y = "Rolling Correlation", x = "Year") +
+      geom_hline(yintercept = 0, linetype = "dashed", color = "gray")
+    
+    print(p)  # will show up in RStudio Plots pane
+    readline(prompt = "📸 Screenshot this graph and press [Enter] for next...")
+  }
+}
+
+```
+
+```{r}
+#3. Visualize as Heatmap
+
+# Reshape to long format
+cor_long <- cor_results %>%
+  pivot_longer(cols = starts_with("cor_"), names_to = "macro_var", values_to = "correlation")
+
+# Heatmap
+ggplot(cor_long, aes(x = macro_var, y = stock, fill = correlation)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "red", high = "blue", mid = "white", midpoint = 0) +
+  theme_minimal() +
+  labs(title = "Correlation: Stock Returns vs. Macro Indicators",
+       x = "Macroeconomic Variable", y = "Stock Ticker")
+
+```
+
+```{r}
+# GDP correlation by industry
+cor_gdp_by_industry <- df_clean %>%
+  group_by(industry) %>%
+  summarise(cor_gdp = cor(monthly_return, gdp, use = "complete.obs")) %>%
+  arrange(cor_gdp)
+
+
+ggplot(cor_gdp_by_industry, aes(x = reorder(industry, cor_gdp), y = cor_gdp, fill = cor_gdp)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_gradient2(low = "red", high = "blue", mid = "white", midpoint = 0) +
+  labs(title = "Correlation between GDP and Stock Returns by Industry",
+       y = "Correlation with GDP", x = "Industry") +
+  theme_minimal()
+
+# GDP correlation by companies in DJIA
+cor_gdp_by_stock <- df_clean %>%
+  group_by(stock) %>%
+  summarise(cor_gdp = cor(monthly_return, gdp, use = "complete.obs")) %>%
+  arrange(cor_gdp)
+
+ggplot(cor_gdp_by_stock, aes(x = reorder(stock, cor_gdp), y = cor_gdp, fill = cor_gdp)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_gradient2(low = "red", high = "blue", mid = "white", midpoint = 0) +
+  labs(title = "Correlation between GDP and Stock Returns by Company",
+       y = "Correlation with GDP", x = "Stock Ticker") +
+  theme_minimal()
+```
+
+```{r}
+# CPI correlation by industry
+cor_cpi_by_industry <- df_clean %>%
+  group_by(industry) %>%
+  summarise(cor_cpi = cor(monthly_return, cpi, use = "complete.obs")) %>%
+  arrange(cor_cpi)
+
+ggplot(cor_cpi_by_industry, aes(x = reorder(industry, cor_cpi), y = cor_cpi, fill = cor_cpi)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_gradient2(low = "red", high = "blue", mid = "white", midpoint = 0) +
+  labs(title = "Correlation between CPI and Stock Returns by Industry",
+       y = "Correlation with CPI", x = "Industry") +
+  theme_minimal()
+
+# CPI correlation by companies in DJIA
+cor_cpi_by_stock <- df_clean %>%
+  group_by(stock) %>%
+  summarise(cor_cpi = cor(monthly_return, cpi, use = "complete.obs")) %>%
+  arrange(cor_cpi)
+
+ggplot(cor_cpi_by_stock, aes(x = reorder(stock, cor_cpi), y = cor_cpi, fill = cor_cpi)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_gradient2(low = "red", high = "blue", mid = "white", midpoint = 0) +
+  labs(title = "Correlation between CPI and Stock Returns by Company",
+       y = "Correlation with CPI", x = "Stock Ticker") +
+  theme_minimal()
+```
+
+```{r}
+# Unemployment rate correlation by industry
+cor_unemployment_rate_by_industry <- df_clean %>%
+  group_by(industry) %>%
+  summarise(cor_unemployment_rate = cor(monthly_return, unemployment_rate, use = "complete.obs")) %>%
+  arrange(cor_unemployment_rate)
+
+ggplot(cor_unemployment_rate_by_industry, aes(x = reorder(industry, cor_unemployment_rate), y = cor_unemployment_rate, fill = cor_unemployment_rate)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_gradient2(low = "red", high = "blue", mid = "white", midpoint = 0) +
+  labs(title = "Correlation between unemployment_rate and Stock Returns by Industry",
+       y = "Correlation with unemployment_rate", x = "Industry") +
+  theme_minimal()
+
+# CPI correlation by companies in DJIA
+cor_unemployment_rate_by_stock <- df_clean %>%
+  group_by(stock) %>%
+  summarise(cor_unemployment_rate = cor(monthly_return, unemployment_rate, use = "complete.obs")) %>%
+  arrange(cor_unemployment_rate)
+
+ggplot(cor_unemployment_rate_by_stock, aes(x = reorder(stock, cor_unemployment_rate), y = cor_unemployment_rate, fill = cor_unemployment_rate)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_gradient2(low = "red", high = "blue", mid = "white", midpoint = 0) +
+  labs(title = "Correlation between unemployment_rate and Stock Returns by Company",
+       y = "Correlation with unemployment_rate", x = "Stock Ticker") +
+  theme_minimal()
+```
+
+```{r}
+# oil_price correlation by industry
+cor_oil_price_by_industry <- df_clean %>%
+  group_by(industry) %>%
+  summarise(cor_oil_price = cor(monthly_return, oil_price, use = "complete.obs")) %>%
+  arrange(cor_oil_price)
+
+ggplot(cor_oil_price_by_industry, aes(x = reorder(industry, cor_oil_price), y = cor_oil_price, fill = cor_oil_price)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_gradient2(low = "red", high = "blue", mid = "white", midpoint = 0) +
+  labs(title = "Correlation between oil_price and Stock Returns by Industry",
+       y = "Correlation with oil_price", x = "Industry") +
+  theme_minimal()
+
+# oil_price correlation by companies in DJIA
+cor_oil_price_by_stock <- df_clean %>%
+  group_by(stock) %>%
+  summarise(cor_oil_price = cor(monthly_return, oil_price, use = "complete.obs")) %>%
+  arrange(cor_oil_price)
+
+ggplot(cor_oil_price_by_stock, aes(x = reorder(stock, cor_oil_price), y = cor_oil_price, fill = cor_oil_price)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_gradient2(low = "red", high = "blue", mid = "white", midpoint = 0) +
+  labs(title = "Correlation between oil_price and Stock Returns by Company",
+       y = "Correlation with oil_price", x = "Stock Ticker") +
+  theme_minimal()
+```
+
+```{r}
+# interest_rate correlation by industry
+cor_interest_rate_by_industry <- df_clean %>%
+  group_by(industry) %>%
+  summarise(cor_interest_rate = cor(monthly_return, interest_rate, use = "complete.obs")) %>%
+  arrange(cor_interest_rate)
+
+ggplot(cor_interest_rate_by_industry, aes(x = reorder(industry, cor_interest_rate), y = cor_interest_rate, fill = cor_interest_rate)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_gradient2(low = "red", high = "blue", mid = "white", midpoint = 0) +
+  labs(title = "Correlation between interest_rate and Stock Returns by Industry",
+       y = "Correlation with interest_rate", x = "Industry") +
+  theme_minimal()
+
+# interest_rate correlation by companies in DJIA
+cor_interest_rate_by_stock <- df_clean %>%
+  group_by(stock) %>%
+  summarise(cor_interest_rate = cor(monthly_return, interest_rate, use = "complete.obs")) %>%
+  arrange(cor_interest_rate)
+
+ggplot(cor_interest_rate_by_stock, aes(x = reorder(stock, cor_interest_rate), y = cor_interest_rate, fill = cor_interest_rate)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_gradient2(low = "red", high = "blue", mid = "white", midpoint = 0) +
+  labs(title = "Correlation between interest_rate and Stock Returns by Company",
+       y = "Correlation with interest_rate", x = "Stock Ticker") +
+  theme_minimal()
+```
+
+```{r}
+# STEP 1: Summarize average rolling correlation by industry & macro
+industry_means <- industry_roll_corrs %>%
+  drop_na(rolling_corr) %>%  # remove NA rows
+  group_by(industry, macro_var) %>%
+  summarise(mean_corr = mean(rolling_corr), .groups = "drop") %>%
+  pivot_wider(names_from = macro_var, values_from = mean_corr)
+
+# STEP 2: Convert to matrix and scale
+industry_matrix <- industry_means %>%
+  column_to_rownames("industry") %>%
+  scale()
+
+# STEP 3: Hierarchical clustering
+dist_matrix <- dist(industry_matrix)
+hc <- hclust(dist_matrix, method = "ward.D2")
+
+# STEP 4: Plot a clean dendrogram using fviz_dend
+fviz_dend(hc,
+          k = 3,                      # number of clusters
+          rect = TRUE,               # draw rectangles around clusters
+          cex = 1.2,                 # font size of labels
+          lwd = 1.2,                 # line width
+          k_colors = c("#00AFBB", "#E7B800", "#FC4E07"),  # optional cluster colors
+          main = "Industry Clustering Based on Avg. Macro Rolling Correlations",
+          xlab = "", ylab = "Height")
+
+# (Optional) STEP 5: Get cluster assignment
+cluster_labels <- cutree(hc, k = 3)
+print(cluster_labels)
+```
+
+```{r}
+industry_matrix <- industry_roll_corrs %>%
+  drop_na(rolling_corr) %>%
+  group_by(industry, macro_var) %>%
+  summarise(mean_corr = mean(rolling_corr), .groups = "drop") %>%
+  pivot_wider(names_from = macro_var, values_from = mean_corr) %>%
+  column_to_rownames("industry") %>%
+  scale()  # Normalize
+```
+
+```{r}
+#1. Hierarchical Clustering
+library(factoextra)
+
+# Pretty dendrogram with colored branches and better label spacing
+fviz_dend(hc,
+          k = 3,                      # number of clusters
+          rect = TRUE,               # draw cluster rectangles
+          cex = 1.2,                 # label font size
+          lwd = 1.2,                 # branch line width
+          k_colors = c("#00AFBB", "#E7B800", "#FC4E07"),  # nice colors
+          main = "Hierarchical Clustering: Industry Macro Sensitivities",
+          xlab = "", ylab = "Height")
+
+```
+```{r}
+#2. K-Means Clustering
+
+set.seed(123)
+kmeans_result <- kmeans(industry_matrix, centers = 3, nstart = 25)
+
+# Cluster assignments
+kmeans_clusters <- kmeans_result$cluster
+print(kmeans_clusters)
+
+# Optional: compare clusters
+fviz_cluster(list(data = industry_matrix, cluster = kmeans_clusters),
+             main = "K-Means Clustering (k=3)",
+             ellipse.type = "euclid", repel = TRUE)
+```
+```{r}
+#3. Model-Based Clustering (Mclust)
+
+library(mclust)
+
+# Run model-based clustering
+mclust_result <- Mclust(industry_matrix)
+
+# Summary of best model & clusters
+summary(mclust_result)
+
+# Extract best model's cluster classification
+mclust_clusters <- mclust_result$classification
+print(mclust_clusters)
+
+# Visualization
+fviz_mclust(mclust_result, what = "classification",
+            main = "Model-Based Clustering: Industry Groups")
+```
+
+# Event Analysis
+```{r}
+df$Date <- as.Date(paste0("01-", df$Date), format = "%d-%m-%Y")
+df$month <- floor_date(df$Date, "month")
+
+# Define Fed Cut dates (set to the beginning of each relevant month)
+fed_cut_months <- floor_date(as.Date(c("1989-06-01", "2001-01-03", 
+                                       "2007-09-18", "2020-03-03")), "month")
+
+# Initialize relative month variable (event window)
+df$relative_month <- NA_integer_
+
+# For each row, check if it's within -1, 0, or +1 months of a Fed Cut
+for (i in 1:nrow(df)) {
+  current_month <- df$month[i]
+  if (is.na(current_month)) next
+  
+  diffs <- interval(fed_cut_months, current_month) %/% months(1)
+  
+  if (any(abs(diffs) <= 1)) {
+    df$relative_month[i] <- diffs[which.min(abs(diffs))]
+  }
+}
+
+# Filter valid data within the event window
+monthly_event_data <- df %>% 
+  filter(!is.na(relative_month), !is.na(monthly_return))
+
+# Calculate average return and error metrics by relative month
+monthly_summary <- monthly_event_data %>%
+  group_by(relative_month) %>%
+  summarise(mean_return = mean(monthly_return, na.rm = TRUE),
+            sd_return = sd(monthly_return, na.rm = TRUE),
+            count = n(),
+            se = sd_return / sqrt(count))
+
+# Plot overall market response to Fed Cuts (monthly granularity)
+ggplot(monthly_summary, aes(x = relative_month, y = mean_return)) +
+  geom_line() +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = mean_return - se, ymax = mean_return + se), width = 0.2) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "Mean Monthly Return Around Fed Cut Events (Monthly View)",
+       x = "Months Relative to Fed Cut",
+       y = "Mean Monthly Return") +
+  theme_minimal()
+```
+
+```{r}
+# Add event ID to track individual Fed Cuts
+fed_cut_months <- floor_date(as.Date(c(
+  "1989-06-01",
+  "2001-01-03",
+  "2007-09-18",
+  "2020-03-03"
+)), "month")
+
+df$event_id <- NA_character_
+df$relative_month <- NA_integer_
+
+for (i in 1:nrow(df)) {
+  current_month <- floor_date(df$Date[i], "month")
+  if (is.na(current_month)) next
+  
+  diffs <- interval(fed_cut_months, current_month) %/% months(1)
+  
+  if (any(abs(diffs) <= 1)) {
+    index <- which.min(abs(diffs))
+    df$relative_month[i] <- diffs[index]
+    df$event_id[i] <- paste0("FedCut_", year(fed_cut_months[index]))
+  }
+}
+
+# Summarize return and stats per event
+event_separated_summary <- df %>%
+  filter(!is.na(event_id), !is.na(monthly_return)) %>%
+  group_by(event_id, relative_month) %>%
+  summarise(mean_return = mean(monthly_return, na.rm = TRUE),
+            sd_return = sd(monthly_return, na.rm = TRUE),
+            count = n(),
+            se = sd_return / sqrt(count),
+            .groups = "drop")
+
+ggplot(event_separated_summary, aes(x = relative_month, y = mean_return)) +
+  geom_line() +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = mean_return - se, ymax = mean_return + se), width = 0.2) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
+  facet_wrap(~ event_id, ncol = 2) +
+  labs(title = "Monthly Return Around Each Fed Cut Event",
+       x = "Months Relative to Fed Cut",
+       y = "Mean Monthly Return") +
+  theme_minimal()
+```
+
+```{r}
+# t-test: Is post-Fed Cut return significantly different from pre-cut?
+t_results <- data.frame(
+  event_id = character(),
+  pre_mean = numeric(),
+  post_mean = numeric(),
+  p_value = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Run paired t-test on each Fed Cut
+for (eid in unique(na.omit(df$event_id))) {
+  subset_data <- df %>% filter(event_id == eid)
+  
+  pre <- subset_data %>% filter(relative_month == -1) %>% pull(monthly_return)
+  post <- subset_data %>% filter(relative_month == 1) %>% pull(monthly_return)
+  
+  if (length(pre) > 1 & length(post) > 1) {
+    t_result <- t.test(pre, post)
+    
+    t_results <- rbind(t_results, data.frame(
+      event_id = eid,
+      pre_mean = mean(pre, na.rm = TRUE),
+      post_mean = mean(post, na.rm = TRUE),
+      p_value = t_result$p.value
+    ))
+  }
+}
+
+print(t_results)
+```
+
+```{r}
+# Average industry return after Fed Cuts (+1 Month only)
+industry_return_postcut <- df %>%
+  filter(relative_month == 1, !is.na(industry), !is.na(monthly_return)) %>%
+  group_by(industry) %>%
+  summarise(mean_return = mean(monthly_return, na.rm = TRUE),
+            sd_return = sd(monthly_return, na.rm = TRUE),
+            count = n(),
+            se = sd_return / sqrt(count),
+            .groups = "drop") %>%
+  arrange(desc(mean_return))
+
+ggplot(industry_return_postcut, aes(x = reorder(industry, mean_return), y = mean_return)) +
+  geom_bar(stat = "identity", fill = "#E7B800") +
+  geom_errorbar(aes(ymin = mean_return - se, ymax = mean_return + se), width = 0.2) +
+  coord_flip() +
+  labs(title = "Industry Mean Monthly Return After Fed Cut (+1 Month)",
+       x = "Industry",
+       y = "Mean Monthly Return") +
+  theme_minimal(base_size = 12)
+```
+
+```{r}
+# Industry-level return for each Fed Cut (+1 Month)
+industry_by_event <- df %>%
+  filter(relative_month == 1, !is.na(industry), !is.na(monthly_return), !is.na(event_id)) %>%
+  group_by(event_id, industry) %>%
+  summarise(mean_return = mean(monthly_return, na.rm = TRUE),
+            count = n(),
+            .groups = "drop") %>%
+  arrange(event_id, desc(mean_return))
+
+ggplot(industry_by_event, aes(x = reorder(industry, mean_return), y = mean_return)) +
+  geom_bar(stat = "identity", fill = "#00AFBB") +
+  coord_flip() +
+  facet_wrap(~ event_id,  ncol = 1, scales = "free_y") +
+  labs(title = "Industry Mean Monthly Return After Fed Cut (+1 Month)",
+       x = "Industry",
+       y = "Mean Monthly Return") +
+  theme_minimal(base_size = 12)
+```
+
+```{r}
+# Industry absolute change (volatility response) around Fed Cuts
+industry_relative <- df %>%
+  filter(relative_month %in% c(-1, 1),
+         !is.na(event_id), !is.na(industry), !is.na(monthly_return)) %>%
+  mutate(relative_month = as.character(relative_month)) %>%  
+  group_by(event_id, industry, relative_month) %>%
+  summarise(mean_return = mean(monthly_return, na.rm = TRUE), .groups = "drop")
+
+industry_wide <- industry_relative %>%
+  pivot_wider(names_from = relative_month, values_from = mean_return) %>%
+  mutate(abs_change = abs(`1` - `-1`))  
+
+ggplot(industry_wide, aes(x = reorder(industry, abs_change), y = abs_change)) +
+  geom_bar(stat = "identity", fill = "#00AFBB") +
+  coord_flip() +
+  facet_wrap(~ event_id, ncol = 1, scales = "free_y") +
+  labs(title = "Absolute Return Change by Industry Around Fed Cuts",
+       x = "Industry",
+       y = "Absolute Change (|Return[+1] - Return[-1]|)") +
+  theme_minimal(base_size = 12)
+```
+
+```{r}
+# Overall industry sensitivity (average absolute return change across all Fed Cuts)
+industry_overall <- industry_wide %>%
+group_by(industry) %>%
+  summarise(avg_abs_change = mean(abs_change, na.rm = TRUE),
+            sd = sd(abs_change, na.rm = TRUE),
+            count = n()) %>%
+  arrange(desc(avg_abs_change))
+
+ggplot(industry_overall, aes(x = reorder(industry, avg_abs_change), y = avg_abs_change)) +
+  geom_bar(stat = "identity", fill = "#E7B800") +
+  coord_flip() +
+  labs(title = "Industry Sensitivity to Fed Cuts (Avg Absolute Return Change)",
+       x = "Industry",
+       y = "Avg |Return Change| Across 4 Fed Cuts") +
+  theme_minimal(base_size = 12)
+```
+
+
+```{r}
+# 1. Prepare industry-level features
+industry_features <- df %>%
+  filter(relative_month %in% c(-1, 1), 
+         !is.na(industry), 
+         !is.na(event_id), 
+         !is.na(monthly_return)) %>%
+  group_by(industry, event_id) %>%
+  # Calculate return changes around each Fed cut
+  summarize(
+    pre_cut = mean(monthly_return[relative_month == -1]),
+    post_cut = mean(monthly_return[relative_month == 1]),
+    return_change = post_cut - pre_cut,
+    abs_change = abs(return_change),
+    volatility = sd(monthly_return),
+    .groups = "drop"
+  ) %>%
+  group_by(industry) %>%
+  # Aggregate features across all Fed cuts
+  summarize(
+    avg_abs_change = mean(abs_change),
+    avg_return_change = mean(return_change),
+    avg_volatility = mean(volatility),
+    consistency = sd(return_change) # Lower means more consistent response
+  )
+
+# 2. Scale the features for clustering
+features_scaled <- scale(industry_features[,-1]) # exclude industry name
+rownames(features_scaled) <- industry_features$industry
+
+# 3. Perform k-means clustering
+set.seed(123) # for reproducibility
+k <- 3 # three clusters as specified
+km_result <- kmeans(features_scaled, centers = k, nstart = 25)
+
+# 4. Add cluster assignments back to original data
+industry_clusters <- industry_features %>%
+  mutate(cluster = km_result$cluster)
+
+# 5. Label clusters based on avg_abs_change
+cluster_characteristics <- industry_clusters %>%
+  group_by(cluster) %>%
+  summarize(
+    mean_abs_change = mean(avg_abs_change),
+    mean_volatility = mean(avg_volatility)
+  ) %>%
+  mutate(
+    cluster_label = case_when(
+      rank(-mean_abs_change) == 1 ~ "Most Reactive",
+      rank(-mean_abs_change) == 2 ~ "Mildly Responsive",
+      TRUE ~ "Defensive/Stable"
+    )
+  )
+
+# 6. Create final summary with labels
+final_clusters <- industry_clusters %>%
+  left_join(cluster_characteristics %>% select(cluster, cluster_label), by = "cluster") %>%
+  arrange(cluster_label, desc(avg_abs_change))
+
+# 7. Visualize results
+# Plot 1: Industry groupings
+ggplot(final_clusters, aes(x = reorder(industry, avg_abs_change), 
+                          y = avg_abs_change, 
+                          fill = cluster_label)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Industry Clusters Based on Fed Rate Cut Reactions",
+       x = "Industry",
+       y = "Average Absolute Return Change",
+       fill = "Cluster Type") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set2")
+
+# Print summary of clusters
+print("Industry Groupings:")
+print(final_clusters %>% 
+      select(industry, cluster_label, avg_abs_change, avg_volatility) %>%
+      arrange(cluster_label, desc(avg_abs_change)))
+
+
+fviz_cluster(km_result, data = features_scaled,
+             main = "Industry Clusters Based on Fed Cut Reactions",
+             ellipse.type = "convex",
+             repel = TRUE)
+```
+
+# Multiple Regression Models for Monthly return on global (ANOVA)
+```{r}
+# --- Filter and define formula ---
+formula <- monthly_return ~ oil_price + change_oil_price + gdp + change_gdp +
+  interest_rate + change_interest_rate + cpi + change_cpi_rate +
+  unemployment_rate + change_unemployment_rate
+
+df_filtered <- df %>%
+  filter(!is.na(industry), !is.na(monthly_return))
+
+# --- Get unique industries ---
+industries <- unique(df_filtered$industry)
+
+# --- Loop over industries and print Anova tables ---
+for (ind in industries) {
+  cat("\n==============================\n")
+  cat("Industry:", ind, "\n")
+  cat("==============================\n")
+  
+  sub_data <- df_filtered %>% filter(industry == ind)
+  model <- lm(formula, data = sub_data)
+  print(Anova(model, type = 2))  # Type II ANOVA
+}
+
+```
+
+
+```{r}
+df %>%
+  # Remove NA values first
+  drop_na(industry, monthly_return) %>%
+  # Create the plot
+  ggplot(aes(x = reorder(industry, monthly_return, FUN = median), 
+         y = monthly_return)) +
+  geom_boxplot(fill = "lightblue", outlier.color = "red") +
+  coord_flip() +
+  labs(
+    title = "Monthly Returns by Industry",
+    x = "Industry",
+    y = "Monthly Return (%)"
+  ) +
+  theme_minimal()
+```
+
+
+```{r}
+df %>%
+  # Ensure we're working with the correct columns
+  select(industry, monthly_return) %>%
+  # Remove NA values first (more efficient)
+  drop_na(industry, monthly_return) %>%
+  # Group and summarize
+  group_by(industry) %>%
+  summarise(avg_return = mean(monthly_return)) %>%
+  # Create plot
+  ggplot(aes(x = reorder(industry, avg_return), 
+             y = avg_return)) +
+  geom_col(fill = "steelblue") +
+  # Add value labels
+  geom_text(aes(label = scales::percent(avg_return, accuracy = 0.1)), 
+            hjust = -0.1, size = 3) +
+  coord_flip() +
+  # Improve formatting
+  scale_y_continuous(labels = scales::percent_format(),
+                    expand = expansion(mult = c(0, 0.1))) +
+  labs(
+    title = "Average Monthly Returns by Industry",
+    x = NULL,
+    y = "Average Return"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+```
+
+
+
+```{r}
+
+
+df <- df %>%
+  filter(!is.na(industry), !is.na(monthly_return), !is.na(Date)) %>%
+  mutate(Date = parse_date_time(Date, orders = "my"))
+
+industry_ts_data <- df %>%
+  group_by(industry, Date) %>%
+  summarize(monthly_return = mean(monthly_return, na.rm = TRUE), .groups = "drop")
+
+ts_models <- industry_ts_data %>%
+  group_by(industry) %>%
+  arrange(Date) %>%
+  nest() %>%
+  mutate(
+    ts_data = map(data, ~ {
+      d <- .x
+      if (nrow(d) < 24 || any(is.na(d$monthly_return))) return(NULL)
+      start_year <- year(min(d$Date))
+      start_month <- month(min(d$Date))
+      ts(d$monthly_return, frequency = 12, start = c(start_year, start_month))
+    }),
+    model = map(ts_data, ~ if (!is.null(.x)) auto.arima(.x) else NULL),
+    forecast = map(model, ~ if (!is.null(.x)) forecast(.x, h = 12) else NULL)
+  )
+
+
+plots <- ts_models %>%
+  filter(!map_lgl(forecast, is.null)) %>%
+  mutate(plots = map2(forecast, industry, ~ autoplot(.x) + ggtitle(.y))) %>%
+  pull(plots)
+
+print(plots[[1]])
+print(plots[[2]])
+print(plots[[3]])
+print(plots[[4]])
+print(plots[[5]])
+```
+
+#????
+```{r}
+df <- df %>%
+  filter(!is.na(industry), !is.na(monthly_return), !is.na(Date)) %>%
+  mutate(Date = as.Date(paste0("01-", Date), format = "%d-%m-%Y"))
+
+# --- Step 2: Aggregate monthly return by industry and date ---
+industry_ts_data <- df %>%
+  group_by(industry, Date) %>%
+  summarize(monthly_return = mean(monthly_return, na.rm = TRUE), .groups = "drop")
+
+# --- Step 3: Create ACF plots only ---
+ts_acf_models <- industry_ts_data %>%
+  group_by(industry) %>%
+  arrange(Date) %>%
+  nest() %>%
+  mutate(
+    ts_data = map(data, ~ {
+      d <- .x
+      if (nrow(d) < 24 || any(is.na(d$monthly_return))) return(NULL)
+      start_year <- year(min(d$Date))
+      start_month <- month(min(d$Date))
+      ts(d$monthly_return, frequency = 12, start = c(start_year, start_month))
+    }),
+
+    acf_plot = map2(ts_data, industry, ~ {
+      if (is.null(.x)) return(NULL)
+      acf(.x, main = paste("Series:", .y))  # this will auto plot with confidence bands
+      NULL  # Plot is shown, nothing to return
+    })
+  )
+
+```
+
+

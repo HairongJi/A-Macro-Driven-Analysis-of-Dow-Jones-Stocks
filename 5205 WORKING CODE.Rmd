@@ -1,0 +1,399 @@
+---
+title: "Data cleaning and visualization"
+author: "Group2: Yunuo Qi,Sitong Liu, Ciqing Mu, Tina He, Maggie Li Hong, Hairong Ji"
+date: "2025-03-01"
+output: html_document
+---
+
+```{r}
+setwd('/Users/qyn1215225/Desktop/CU/5205/project')
+# Load necessary library
+library(dplyr)
+library(tidyr)
+library(tidyquant)
+library(ggplot2)
+library(lubridate)
+library(readr)
+library(tidyverse)
+library(zoo)
+```
+
+```{r}
+# Stock Data
+djia_tickers <- c("AMZN","AXP","AMGN", "AAPL", "BA", "CAT", "CSCO", "CVX", "GS", "HD", "HON", "IBM",
+                  "JNJ", "KO", "JPM", "MCD", "MMM", "MRK", "MSFT", "NKE", "PG", "SHW",
+                  "TRV", "UNH", "CRM", "NVDA", "VZ", "V", "WMT", "DIS")
+
+stocks_data <- tq_get(djia_tickers, from = "1980-01-01", to = "2025-01-01", 
+                      periodicity = "monthly")
+
+stocks_data <- stocks_data %>%
+  select(symbol, date, close) %>%
+  rename(stock_price = close) %>%
+  rename(Date = date) %>%
+  rename(Stock = symbol)
+
+stocks_data <- stocks_data %>%
+  group_by(Stock) %>%
+  arrange(Date) %>%
+  mutate(monthly_return = (stock_price / lag(stock_price)) - 1) %>%
+  ungroup()
+
+stocks_data <- stocks_data %>%
+  mutate(Date = as.Date(Date))
+
+stocks_data <- stocks_data %>%
+  mutate(Date = format(Date, "%m-%Y"))
+
+stocks_data <- stocks_data %>%
+  group_by(Stock) %>%
+  mutate(Volatility_3M = rollapply(monthly_return, width = 3, FUN = sd, fill = NA, align = "right", na.rm = TRUE))
+
+write_csv(stocks_data, "stock_data.csv")
+```
+
+```{r}
+# GDP 
+gdp_data = read.csv('/Users/qyn1215225/Desktop/CU/5205/project/raw_data_new/GDP.csv')
+
+# Calculate the quarterly growth rate
+gdp_data <- gdp_data %>%
+  mutate(Growth_Rate = (GDP - lag(GDP)) / lag(GDP) * 100)
+
+# Change the date format to "mm-yyyy"
+gdp_data <- gdp_data %>%
+  mutate(observation_date = as.Date(observation_date))
+
+gdp_data <- gdp_data %>%
+  mutate(observation_date = format(observation_date, "%m-%Y"))
+
+# Expand the data to include all months
+gdp_expanded <- gdp_data %>%
+  mutate(Month = substr(observation_date, 1, 2),
+         Year = substr(observation_date, 4, 7)) %>%
+  complete(Year, Month = sprintf("%02d", 1:12)) %>%
+  fill(GDP, Growth_Rate) %>%
+  mutate(observation_date = paste0(Month, "-", Year)) %>%
+  select(observation_date, GDP, Growth_Rate)
+
+# Print the resulting data frame
+print(gdp_expanded)
+write.csv(gdp_expanded, file = "/Users/qyn1215225/Desktop/CU/5205/project/gdp_expanded_monthly.csv", row.names = FALSE)
+```
+```{r}
+# CPI
+
+file_path <- "/Users/qyn1215225/Desktop/CU/5205/project/raw_data_new/CPIAUCSL.csv"
+df <- read.csv(file_path)
+
+df$observation_date <- as.Date(df$observation_date)
+
+df$Date <- format(df$observation_date, "%m-%Y")
+
+df <- df[, c("Date", "CPIAUCSL")]
+
+df <- df %>%
+  mutate(CPI_Rate_Change = ((CPIAUCSL - lag(CPIAUCSL)) / lag(CPIAUCSL)) * 100)
+
+write.csv(df, "/Users/qyn1215225/Desktop/CU/5205/project/CPI_monthly_cleaned.csv", row.names = FALSE)
+```
+
+```{r}
+# Interest Rate
+file_path <- "/Users/qyn1215225/Desktop/CU/5205/project/raw_data_new/FEDFUNDS.csv"
+df <- read_csv(file_path)
+
+df <- df %>%
+  mutate(observation_date = format(ymd(observation_date), "%m-%Y"))
+
+colnames(df)[1] <- "Date"
+
+
+df <- df %>%
+  arrange(Date) %>%  
+  mutate(change_of_interest_rate = ((FEDFUNDS - lag(FEDFUNDS)) / lag(FEDFUNDS)) * 100)
+
+df$change_of_interest_rate[is.na(df$change_of_interest_rate)] <- 0
+
+output_file <- "/Users/qyn1215225/Desktop/CU/5205/project/Modified_InterestRate.csv"
+write_csv(df, output_file)
+
+cat("File saved successfully as", output_file)
+```
+```{r}
+# Oil Price
+# Read the CSV file
+oil_data <- read.csv("/Users/qyn1215225/Desktop/CU/5205/project/raw_data_new/crude oil.csv", stringsAsFactors = FALSE)
+
+# Rename columns for easier use
+colnames(oil_data) <- c("Date", "Oil_Price")
+
+# Convert "Date" from text format (Jan-2014) to proper Date format
+oil_data <- oil_data %>%
+  mutate(Date = parse_date_time(Date, orders = "my")) %>%  # Convert to Date format
+  arrange(Date) %>%  # Ensure chronological order
+  mutate(Date = format(Date, "%m-%Y"))  # Format as "MM-YYYY"
+
+# Convert Oil Price to numeric
+oil_data$Oil_Price <- as.numeric(oil_data$Oil_Price)
+
+# Calculate percentage change in oil price
+oil_data <- oil_data %>%
+  mutate(Change_Percent = (Oil_Price - lag(Oil_Price)) / lag(Oil_Price) * 100)
+
+# Rename the change column
+colnames(oil_data)[colnames(oil_data) == "Change_Percent"] <- "Change_Oil_Price"
+
+# Print first few rows to check
+head(oil_data)
+
+# Save cleaned data
+write.csv(oil_data, "formatted_oil_data.csv", row.names = FALSE)
+```
+```{r}
+# Unemployment Rate
+# Read the CSV file
+unemployment_rate <- read.csv("/Users/qyn1215225/Desktop/CU/5205/project/raw_data_new/UNRATE.csv", stringsAsFactors = FALSE)
+
+# Rename columns for easier use
+colnames(unemployment_rate) <- c("Date", "Unemployment_Rate")
+
+unemployment_rate <- unemployment_rate %>%
+  mutate(Date = as.Date(Date, format = "%Y-%m-%d")) %>%  # Correct format for two-digit year
+  arrange(Date) %>%
+  mutate(Date = format(Date, "%m-%Y"))  # Convert to "MM-YYYY"
+
+# Convert unemployment rate to numeric
+unemployment_rate$Unemployment_Rate <- as.numeric(unemployment_rate$Unemployment_Rate)
+
+# Calculate percentage change in unemployment rate
+unemployment_rate <- unemployment_rate %>%
+  mutate(Change_Unemployment_Rate = (Unemployment_Rate - lag(Unemployment_Rate)) / lag(Unemployment_Rate) * 100)
+
+# Print first few rows to check
+head(unemployment_rate)
+
+# Save cleaned data
+write.csv(unemployment_rate, "/Users/qyn1215225/Desktop/CU/5205/project/formatted_unemployment_rate.csv", row.names = FALSE)
+```
+
+
+```{r}
+# Read the CSV files
+setwd('/Users/qyn1215225/Desktop/CU/5205/project')
+oil_data <- read_csv("formatted_oil_data.csv")
+gdp_data <- read_csv("gdp_expanded_monthly.csv")
+interest_rate_data <- read_csv("Modified_InterestRate.csv")
+cpi_data <- read_csv("CPI_monthly_cleaned.csv")
+stock_data<-read_csv("stock_data.csv")
+unemployment_data <- read_csv('formatted_unemployment_rate.csv')
+
+# Merge the data frames by the "Date" column
+merged_data <- oil_data %>%
+  full_join(gdp_data, by = c("Date" = "observation_date")) %>%
+  full_join(interest_rate_data, by = "Date") %>%
+  full_join(cpi_data, by = "Date")%>%
+  full_join(stock_data, by = "Date") %>%
+  full_join(unemployment_data, by = "Date")
+
+# Ensure the date format is "MM-YYYY" (already in the correct format)
+merged_data <- merged_data %>%
+  mutate(Date = format(as.Date(paste0("01-", Date), "%d-%m-%Y"), "%m-%Y"))
+
+# Add industry index
+industry_mapping <- data.frame(
+  Stock = c("AMZN", "AXP", "AMGN", "AAPL", "BA", "CAT", "CSCO", "CVX", "GS", "HD", "HON", "IBM",
+            "JNJ", "KO", "JPM", "MCD", "MMM", "MRK", "MSFT", "NKE", "PG", "SHW",
+            "TRV", "UNH", "CRM", "NVDA", "VZ", "V", "WMT", "DIS"),
+  
+  Industry = c("Technology & Communication Services", # AMZN - Amazon
+               "Financials & Insurance", # AXP - American Express
+               "Healthcare", # AMGN - Amgen
+               "Technology & Communication Services", # AAPL - Apple
+               "Industrials & Energy", # BA - Boeing
+               "Industrials & Energy", # CAT - Caterpillar
+               "Technology & Communication Services", # CSCO - Cisco
+               "Industrials & Energy", # CVX - Chevron
+               "Financials & Insurance", # GS - Goldman Sachs
+               "Consumer Discretionary & Consumer Staples", # HD - Home Depot
+               "Industrials & Energy", # HON - Honeywell
+               "Technology & Communication Services", # IBM - International Business Machines
+               "Healthcare", # JNJ - Johnson & Johnson
+               "Consumer Discretionary & Consumer Staples", # KO - Coca-Cola
+               "Financials & Insurance", # JPM - JPMorgan Chase
+               "Consumer Discretionary & Consumer Staples", # MCD - McDonald's
+               "Industrials & Energy", # MMM - 3M
+               "Healthcare", # MRK - Merck
+               "Technology & Communication Services", # MSFT - Microsoft
+               "Consumer Discretionary & Consumer Staples", # NKE - Nike
+               "Consumer Discretionary & Consumer Staples", # PG - Procter & Gamble
+               "Industrials & Energy", # SHW - Sherwin-Williams
+               "Financials & Insurance", # TRV - Travelers Companies
+               "Healthcare", # UNH - UnitedHealth Group
+               "Technology & Communication Services", # CRM - Salesforce
+               "Technology & Communication Services", # NVDA - NVIDIA
+               "Technology & Communication Services", # VZ - Verizon
+               "Financials & Insurance", # V - Visa
+               "Consumer Discretionary & Consumer Staples", # WMT - Walmart
+               "Consumer Discretionary & Consumer Staples") # DIS - Walt Disney
+)
+
+merged_data <- merged_data %>%
+  left_join(industry_mapping, by = "Stock")
+
+merged_data <- merged_data %>%
+  rename(
+    oil_price = Oil_Price,
+    change_oil_price = Change_Oil_Price,
+    gdp = GDP,
+    change_gdp = Growth_Rate,
+    interest_rate = FEDFUNDS,
+    change_interest_rate = change_of_interest_rate,
+    cpi = CPIAUCSL,
+    change_cpi_rate = CPI_Rate_Change,
+    stock = Stock,
+    stock_price = stock_price,
+    monthly_return = monthly_return,
+    volatility = Volatility_3M,
+    unemployment_rate = Unemployment_Rate,
+    change_unemployment_rate = Change_Unemployment_Rate,
+    industry = Industry
+  )
+
+merged_data <- merged_data %>%
+  select(-stock, -stock_price, -monthly_return, -volatility, -industry, everything(), stock, stock_price, monthly_return, volatility, industry)
+
+
+# Optionally, save the merged data to a new CSV file
+write_csv(merged_data, "merged_data.csv")
+```
+
+```{r}
+library(patchwork)  # For combining plots
+library(dplyr)
+
+# Read the merged data (if not already loaded)
+merged_data <- read_csv("merged_data.csv")
+
+# Convert Date to a proper date format for plotting
+merged_data <- merged_data %>%
+  mutate(Date = as.Date(paste0("01-", Date), format = "%d-%m-%Y"))
+
+# Custom theme for larger text and better readability
+custom_theme <- theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 14)
+  )
+
+# Plot 1: GDP over time
+plot_gdp <- ggplot(merged_data, aes(x = Date, y = gdp)) +
+  geom_line(color = "blue", size = 1) +
+  labs(title = "GDP Over Time", x = "Date", y = "GDP") +
+  custom_theme
+
+# Plot 2: Oil Price over time
+plot_oil <- ggplot(merged_data, aes(x = Date, y = oil_price)) +
+  geom_line(color = "red", size = 1) +
+  labs(title = "Oil Price Over Time", x = "Date", y = "Oil Price") +
+  custom_theme
+
+# Plot 3: CPI over time
+plot_cpi <- ggplot(merged_data, aes(x = Date, y = cpi)) +
+  geom_line(color = "green", size = 1) +
+  labs(title = "CPI Over Time", x = "Date", y = "CPI") +
+  custom_theme
+
+# Plot 4: Interest Rate (FEDFUNDS) over time
+plot_interest <- ggplot(merged_data, aes(x = Date, y = interest_rate)) +
+  geom_line(color = "purple", size = 1) +
+  labs(title = "Interest Rate Over Time", x = "Date", y = "Interest Rate") +
+  custom_theme
+
+# Plot 4: Interest Rate (FEDFUNDS) over time
+plot_unemploy <- ggplot(merged_data, aes(x = Date, y = unemployment_rate)) +
+  geom_line(color = "orange", size = 1) +
+  labs(title = "Unemployment Rate", x = "Date", y = "unemployment_rate") +
+  custom_theme
+
+# Save individual plots
+ggsave("gdp_plot.png", plot = plot_gdp, width = 8, height = 6, dpi = 300)
+ggsave("oil_price_plot.png", plot = plot_oil, width = 8, height = 6, dpi = 300)
+ggsave("cpi_plot.png", plot = plot_cpi, width = 8, height = 6, dpi = 300)
+ggsave("interest_rate_plot.png", plot = plot_interest, width = 8, height = 6, dpi = 300)
+ggsave("unemployment_rate.png", plot = plot_unemploy, width = 8, height = 6, dpi = 300)
+```
+```{r}
+# Load dataset
+library(scales)
+file_path <- "/Users/qyn1215225/Desktop/CU/5205/project/merged_data.csv"
+df <- read_csv(file_path)
+
+print(colnames(df))  # Debugging: Print column names to confirm structure
+
+# Fix Date Formatting
+df <- df %>%
+  mutate(Date = as.Date(paste0("01-", Date), format="%d-%m-%Y")) %>%
+  filter(!is.na(Date))
+
+# Remove Missing or Incorrect Data
+df <- df %>%
+  filter(!is.na(monthly_return) & monthly_return != 0)
+
+# Scale Stock Prices for Visibility
+df <- df %>%
+  mutate(monthly_return = monthly_return * 100)  # Convert to percentage scale
+
+# ---- FIX: Use Industry Column Instead of Manual Mapping ----
+df <- df %>%
+  rename(Sector = industry) %>%  # Rename 'industry' column to 'Sector' for clarity
+  filter(!is.na(Sector))  # Remove any NA Sectors
+
+# Debugging: Print sector counts
+print(table(df$Sector, useNA = "ifany"))
+
+# Custom Theme
+custom_theme <- theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(size = 18, face = "bold"),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12),
+    axis.text.x = element_text(angle = 45, hjust = 1)  # Rotate x-axis labels
+  )
+
+# ---- Generate Separate Charts for Each Sector ----
+sector_list <- unique(df$Sector)  # Get all sector names
+
+for (sector in sector_list) {
+  df_sector <- df %>% filter(Sector == sector)  # Filter by sector
+  
+  # Debugging: Ensure sector data exists
+  print(paste("Plotting sector:", sector, " - Rows:", nrow(df_sector)))
+  
+  if (nrow(df_sector) > 0) {  # Only plot if there is data
+    plot_sector <- ggplot(df_sector, aes(x = Date, y = monthly_return, color = stock)) +
+      geom_line(size = 0.8, alpha = 0.7) +  
+      geom_smooth(method = "loess", span = 0.2, se = FALSE, size = 1, linetype = "dashed") +  
+      labs(title = paste(sector, "- Stock Prices"), x = "Date", y = "Stock Price (%)") +
+      scale_y_continuous(labels = percent_format(scale = 1)) +  
+      scale_x_date(date_breaks = "2 years", date_labels = "%Y") +  
+      custom_theme
+    
+    # Display the plot
+    print(plot_sector)
+    
+    # Save each sector’s plot as a separate PNG
+    ggsave(paste0("Stock_Prices_", gsub(" ", "_", sector), ".png"), plot = plot_sector, width = 12, height = 8, dpi = 300)
+  } else {
+    print(paste("Skipping sector:", sector, "- No data available."))
+  }
+}
+```
+
+```{r}
+
+
+
